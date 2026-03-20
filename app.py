@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import json
+import numpy as np
 
 # ═══════════════════════════════════════════════════════
 # Load Data
@@ -12,62 +13,119 @@ def load_data():
     yields = pd.read_csv("crop_yield.csv")
     with open("lease_rates.json") as f:
         lease_rates = json.load(f)
-    return prices, yields, lease_rates
+    with open("district_lease_rates.json") as f:
+        district_rates = json.load(f)
+    return prices, yields, lease_rates, district_rates
 
-price_df, yield_df, LEASE_RATES = load_data()
-DEFAULT_LEASE = {"min": 30000, "avg": 50000, "max": 80000}
+price_df, yield_df, STATE_LEASE_RATES, DISTRICT_LEASE_RATES = load_data()
+DEFAULT_LEASE = {"min": 15000, "avg": 25000, "max": 40000}
 
 # ═══════════════════════════════════════════════════════
-# Realistic Farming Cost per Acre (Rs)
+# Crop Growing Cycles per Year
+# ═══════════════════════════════════════════════════════
+CROP_CYCLES = {
+    'Amaranthus':   3,
+    'Banana':       1,
+    'Beans':        2,
+    'Beetroot':     2,
+    'Bitter Gourd': 2,
+    'Bottle Gourd': 2,
+    'Brinjal':      2,
+    'Cabbage':      2,
+    'Capsicum':     2,
+    'Carrot':       2,
+    'Cauliflower':  2,
+    'Coconut':      1,
+    'Cotton':       1,
+    'Garlic':       1,
+    'Grapes':       1,
+    'Green Chilli': 2,
+    'Groundnut':    2,
+    'Guava':        1,
+    'Lemon':        1,
+    'Maize':        2,
+    'Mango':        1,
+    'Mustard':      1,
+    'Onion':        2,
+    'Orange':       1,
+    'Papaya':       1,
+    'Pomegranate':  1,
+    'Potato':       2,
+    'Pumpkin':      2,
+    'Rice':         2,
+    'Soyabean':     1,
+    'Spinach':      3,
+    'Sugarcane':    1,
+    'Sunflower':    2,
+    'Tomato':       3,
+    'Turmeric':     1,
+    'Wheat':        1,
+}
+
+# ═══════════════════════════════════════════════════════
+# Realistic Farming Cost per Acre per Cycle (Rs)
 # ═══════════════════════════════════════════════════════
 FARMING_COSTS = {
-    'Amaranthus':   8000,
+    'Amaranthus':   4000,
     'Banana':      35000,
-    'Beans':       12000,
-    'Beetroot':    10000,
-    'Bitter Gourd':12000,
-    'Bottle Gourd':10000,
-    'Brinjal':     12000,
-    'Cabbage':     12000,
-    'Capsicum':    18000,
-    'Carrot':      15000,
-    'Cauliflower': 14000,
+    'Beans':        6000,
+    'Beetroot':     5000,
+    'Bitter Gourd': 6000,
+    'Bottle Gourd': 5000,
+    'Brinjal':      6000,
+    'Cabbage':      6000,
+    'Capsicum':     9000,
+    'Carrot':       7500,
+    'Cauliflower':  7000,
     'Coconut':     20000,
     'Cotton':      18000,
     'Garlic':      25000,
     'Grapes':      45000,
-    'Green Chilli':15000,
-    'Groundnut':   18000,
+    'Green Chilli': 7500,
+    'Groundnut':    9000,
     'Guava':       20000,
     'Lemon':       18000,
-    'Maize':       12000,
+    'Maize':        6000,
     'Mango':       20000,
     'Mustard':     10000,
-    'Onion':       18000,
+    'Onion':        9000,
     'Orange':      20000,
     'Papaya':      22000,
     'Pomegranate': 35000,
-    'Potato':      20000,
-    'Pumpkin':     10000,
-    'Rice':        22000,
+    'Potato':      10000,
+    'Pumpkin':      5000,
+    'Rice':        11000,
     'Soyabean':    10000,
-    'Spinach':      8000,
+    'Spinach':      2700,
     'Sugarcane':   25000,
-    'Sunflower':   10000,
-    'Tomato':      18000,
+    'Sunflower':    5000,
+    'Tomato':       6000,
     'Turmeric':    22000,
     'Wheat':       12000,
 }
 
 # ═══════════════════════════════════════════════════════
-# Functions
+# Helper Functions
 # ═══════════════════════════════════════════════════════
+def get_districts(state):
+    rows = price_df[price_df["state"].str.lower() == state.lower()]
+    return sorted(rows["district"].dropna().unique().tolist()) if "district" in price_df.columns else []
+
+def get_crops_by_district(state, district):
+    rows = price_df[
+        (price_df["state"].str.lower()    == state.lower()) &
+        (price_df["district"].str.lower() == district.lower())
+    ] if "district" in price_df.columns else price_df[
+        price_df["state"].str.lower() == state.lower()
+    ]
+    return sorted(rows["crop"].dropna().unique().tolist())
+
 def get_price(state, crop):
     row = price_df[
         (price_df["state"].str.lower() == state.lower()) &
         (price_df["crop"].str.lower()  == crop.lower())
     ]
-    return row["avg_price_quintal"].values[0] if not row.empty else None
+    return float(row["avg_price_quintal"].values[0]) if not row.empty else None
 
 def get_yield(state, crop, irrigation):
     row = yield_df[
@@ -75,105 +133,111 @@ def get_yield(state, crop, irrigation):
         (yield_df["crop"].str.lower()  == crop.lower())
     ]
     if not row.empty:
-        base_yield = row["avg_yield_kg_ha"].values[0]
+        base_yield = float(row["avg_yield_kg_ha"].values[0])
     else:
         nat = yield_df[yield_df["crop"].str.lower() == crop.lower()]
-        base_yield = nat["avg_yield_kg_ha"].mean() if not nat.empty else 4000
+        base_yield = float(nat["avg_yield_kg_ha"].mean()) if not nat.empty else 4000
+    return base_yield * 0.8 if irrigation == "Rainfed" else base_yield * 1.2
 
-    if irrigation == "Rainfed":
-        return base_yield * 0.8
-    else:
-        return base_yield * 1.2
-
-def estimate_cost(crop, acres):
-    base_cost = FARMING_COSTS.get(crop, 15000)
-    return base_cost * acres
+def get_lease_rate(state, district):
+    if district and district in DISTRICT_LEASE_RATES:
+        return DISTRICT_LEASE_RATES[district]
+    return STATE_LEASE_RATES.get(state, DEFAULT_LEASE)
 
 # ═══════════════════════════════════════════════════════
 # Page Config
 # ═══════════════════════════════════════════════════════
 st.set_page_config(page_title="AgriConnect+", page_icon="🌾", layout="centered")
-
 st.title("🌾 AgriConnect+")
 st.subheader("Crop Income vs Lease Income Comparison")
-st.markdown("**Find whether farming or leasing gives you more profit**")
+st.markdown("**Find whether farming or leasing gives you more profit — year by year!**")
 st.divider()
 
 # ═══════════════════════════════════════════════════════
 # Inputs
 # ═══════════════════════════════════════════════════════
 available_states = sorted(price_df["state"].dropna().unique().tolist())
-available_crops  = sorted(price_df["crop"].dropna().unique().tolist())
 
 col1, col2 = st.columns(2)
-
 with col1:
-    state      = st.selectbox("📍 State", available_states)
-    irrigation = st.selectbox("💧 Irrigation Type", ["Irrigated", "Rainfed"])
-    month      = st.slider("📅 Harvest Month", 1, 12, 6)
-
+    state = st.selectbox("📍 State", available_states)
 with col2:
-    state_crops = sorted(
-        price_df[price_df["state"].str.lower() == state.lower()]["crop"].unique().tolist()
-    )
+    # District dropdown - auto from state
+    if "district" in price_df.columns:
+        districts = get_districts(state)
+        district  = st.selectbox("🏘️ District", districts) if districts else st.text_input("District", "")
+    else:
+        district = ""
+
+col3, col4 = st.columns(2)
+with col3:
+    # Crops filtered by district
+    if district:
+        state_crops = get_crops_by_district(state, district)
+    else:
+        state_crops = sorted(price_df[price_df["state"].str.lower() == state.lower()]["crop"].unique().tolist())
     if not state_crops:
-        state_crops = available_crops
-    crop  = st.selectbox("🌱 Crop", state_crops)
+        state_crops = sorted(price_df["crop"].dropna().unique().tolist())
+    crop = st.selectbox("🌱 Crop", state_crops)
+
+with col4:
+    irrigation = st.selectbox("💧 Irrigation Type", ["Irrigated", "Rainfed"])
+
+col5, col6 = st.columns(2)
+with col5:
+    years = st.slider("📅 Number of Years", min_value=0.5, max_value=15.0,
+                      value=1.0, step=0.5,
+                      help="How many years to compare income")
+with col6:
     acres = st.number_input("🏡 Land Size (Acres)", 0.5, 1000.0, 2.0, step=0.5)
 
 st.divider()
 
 # ═══════════════════════════════════════════════════════
-# Price & Yield
+# Price, Yield, Cycles
 # ═══════════════════════════════════════════════════════
 price    = get_price(state, crop)
 yield_kg = get_yield(state, crop, irrigation)
+cycles   = CROP_CYCLES.get(crop, 1)
 
-# Market Scenario
 risk = st.radio("📊 Market Scenario",
                 ["Low (Bad Season)", "Average", "High (Good Season)"],
                 index=1, horizontal=True)
 
 if price:
-    if "Low" in risk:
-        price *= 0.8
-    elif "High" in risk:
-        price *= 1.2
+    if "Low" in risk:    price_used = price * 0.8
+    elif "High" in risk: price_used = price * 1.2
+    else:                price_used = price
+else:
+    price_used = st.number_input("Enter price manually (Rs/quintal)", 0.0, 100000.0, 2500.0)
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 with c1:
-    if price:
-        st.info(f"📊 **Avg Mandi Price**\n\n₹{price:,.0f} / quintal\n\n*({risk} scenario)*")
-    else:
-        st.warning("⚠️ No price data — enter manually")
-        price = st.number_input("Enter price manually (Rs/quintal)",
-                                0.0, 100000.0, 2500.0, step=100.0)
+    st.info(f"📊 **Mandi Price**\n\n₹{price_used:,.0f}/quintal")
 with c2:
-    st.info(f"🌾 **Avg Yield**\n\n{yield_kg:,.0f} kg/hectare\n\n*({irrigation})*")
+    st.info(f"🌾 **Yield**\n\n{yield_kg:,.0f} kg/ha")
+with c3:
+    st.info(f"🔄 **Cycles/Year**\n\n{cycles} {'cycle' if cycles == 1 else 'cycles'}")
 
 st.divider()
 
 # ═══════════════════════════════════════════════════════
-# Lease Rate
+# Lease Rate - Auto from District
 # ═══════════════════════════════════════════════════════
-lease_data = LEASE_RATES.get(state, DEFAULT_LEASE)
+lease_data = get_lease_rate(state, district)
 lease_min  = lease_data["min"]
 lease_avg  = lease_data["avg"]
 lease_max  = lease_data["max"]
 
 st.markdown("### 🏠 Lease Rate")
-st.info(f"📍 **{state}** lease rates per acre/year:\n\n"
+location   = f"{district}, {state}" if district else state
+st.info(f"📍 **{location}** lease rates per acre/year:\n\n"
         f"Min: ₹{lease_min:,} | Avg: ₹{lease_avg:,} | Max: ₹{lease_max:,}\n\n"
         f"*(Source: NITI Aayog Agricultural Land Leasing Report)*")
 
-lease_choice = st.radio(
-    "Select lease rate:",
-    ["Minimum", "Average", "Maximum"],
-    index=1, horizontal=True
-)
-lease_per_acre = {"Minimum": lease_min,
-                  "Average": lease_avg,
-                  "Maximum": lease_max}[lease_choice]
+lease_choice   = st.radio("Select lease rate:", ["Minimum", "Average", "Maximum"],
+                           index=1, horizontal=True)
+lease_per_acre = {"Minimum": lease_min, "Average": lease_avg, "Maximum": lease_max}[lease_choice]
 
 st.divider()
 
@@ -182,110 +246,149 @@ st.divider()
 # ═══════════════════════════════════════════════════════
 if st.button("🔍 Compare Income", use_container_width=True, type="primary"):
 
-    # Yield per acre in quintals
-    # 1 hectare = 2.47 acres, 1 quintal = 100 kg
-    yield_quintal_acre = (yield_kg / 100) / 2.47
+    # Per cycle calculations
+    yield_quintal_acre   = (yield_kg / 100) / 2.47
+    gross_per_cycle_acre = yield_quintal_acre * price_used
+    cost_per_cycle_acre  = FARMING_COSTS.get(crop, 15000)
 
-    # Gross income per acre
-    gross_per_acre    = yield_quintal_acre * price
-    total_gross       = gross_per_acre * acres
+    net_per_cycle_acre   = gross_per_cycle_acre - cost_per_cycle_acre
+    net_per_year_acre    = net_per_cycle_acre * cycles
+    lease_per_year_acre  = lease_per_acre
 
-    # Farming cost
-    total_cost        = estimate_cost(crop, acres)
-
-    # Net crop income
-    net_crop_income   = total_gross - total_cost
-
-    # Lease income
-    total_lease       = lease_per_acre * acres
-
-    # Comparison
-    difference        = net_crop_income - total_lease
-    better            = "🌾 Crop Farming" if difference > 0 else "🏠 Leasing Land"
-    margin_pct        = abs(difference / total_lease) * 100 if total_lease > 0 else 0
-
-    # ── Results ───────────────────────────────────
+    # ── Year by year breakdown ─────────────────────
     st.markdown("## 📊 Results")
 
-    # Cost info
-    st.info(f"💸 **Estimated Farming Cost:** ₹{total_cost:,.0f} "
-            f"(₹{FARMING_COSTS.get(crop, 15000):,}/acre × {acres} acres)")
+    # Summary metrics
+    total_years      = years
+    total_crop        = net_per_year_acre * acres * total_years
+    total_lease       = lease_per_year_acre * acres * total_years
+    total_diff        = total_crop - total_lease
+    better            = "🌾 Crop Farming" if total_diff > 0 else "🏠 Leasing Land"
+    margin_pct        = abs(total_diff / total_lease) * 100 if total_lease > 0 else 0
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("🌾 Net Crop Income",  f"₹{net_crop_income:,.0f}",
-              f"₹{gross_per_acre:,.0f} gross/acre")
-    m2.metric("🏠 Lease Income",     f"₹{total_lease:,.0f}",
-              f"₹{lease_per_acre:,}/acre")
-    m3.metric("💰 Difference",       f"₹{abs(difference):,.0f}",
+    m1.metric("🌾 Total Crop Income",  f"₹{total_crop:,.0f}",
+              f"₹{net_per_year_acre*acres:,.0f}/year")
+    m2.metric("🏠 Total Lease Income", f"₹{total_lease:,.0f}",
+              f"₹{lease_per_year_acre*acres:,.0f}/year")
+    m3.metric("💰 Difference",         f"₹{abs(total_diff):,.0f}",
               f"{margin_pct:.1f}% advantage")
 
     st.divider()
 
-    # Recommendation
-    if difference > 0:
-        st.success(
-            f"✅ **Best Option: {better}**\n\n"
-            f"Growing **{crop}** on your {acres}-acre land in **{state}** "
-            f"gives **₹{abs(difference):,.0f} MORE profit** than leasing!\n\n"
-            f"That's **{margin_pct:.1f}% more** after farming costs. 🚀"
-        )
+    if total_diff > 0:
+        st.success(f"✅ **Best Option: {better}**\n\n"
+                   f"Growing **{crop}** on your {acres}-acre land in **{location}** "
+                   f"over {years} years gives **₹{abs(total_diff):,.0f} MORE** than leasing!")
     else:
-        st.warning(
-            f"⚠️ **Best Option: {better}**\n\n"
-            f"Leasing your {acres}-acre land in **{state}** gives "
-            f"**₹{abs(difference):,.0f} MORE** than growing **{crop}**.\n\n"
-            f"Consider a higher-value crop or lease your land this season."
-        )
+        st.warning(f"⚠️ **Best Option: {better}**\n\n"
+                   f"Leasing your {acres}-acre land in **{location}** "
+                   f"over {years} years gives **₹{abs(total_diff):,.0f} MORE** than growing {crop}.")
 
     st.divider()
 
-    # Bar Chart
-    fig, ax = plt.subplots(figsize=(7, 4))
-    values  = [net_crop_income, total_lease]
-    labels  = ["Net Crop Income", "Lease Income"]
-    colors  = ["#2ecc71" if net_crop_income >= total_lease else "#e74c3c",
-               "#2ecc71" if total_lease > net_crop_income  else "#e74c3c"]
+    # ── Year by Year Breakdown ─────────────────────
+    st.markdown("### 📅 Year-by-Year Breakdown")
 
-    bars = ax.bar(labels, values, color=colors, width=0.4, edgecolor="white")
-    for bar, val in zip(bars, values):
-        ax.text(bar.get_x() + bar.get_width()/2,
-                bar.get_height() + max(values)*0.02,
-                f"₹{val:,.0f}", ha="center", fontsize=11, fontweight="bold")
+    year_labels  = []
+    crop_incomes = []
+    lease_incomes= []
 
-    ax.set_title(f"{crop} — {state} ({acres} acres, {irrigation}, {risk.split()[0]} market)",
-                 fontsize=12, fontweight="bold")
-    ax.set_ylabel("Income (₹)")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+    step = 0.5 if years <= 3 else 1.0
+    periods = np.arange(step, years + step/2, step)
+
+    for y in periods:
+        label = f"Year {y:.1f}" if step == 0.5 else f"Year {int(y)}"
+        crop_inc  = net_per_year_acre  * acres * step
+        lease_inc = lease_per_year_acre * acres * step
+        year_labels.append(label)
+        crop_incomes.append(crop_inc)
+        lease_incomes.append(lease_inc)
+
+    # Cumulative
+    cum_crop  = np.cumsum(crop_incomes)
+    cum_lease = np.cumsum(lease_incomes)
+
+    # Table
+    breakdown_df = pd.DataFrame({
+        "Period":              year_labels,
+        "Crop Income (Period)":  [f"₹{v:,.0f}" for v in crop_incomes],
+        "Lease Income (Period)": [f"₹{v:,.0f}" for v in lease_incomes],
+        "Cumulative Crop":       [f"₹{v:,.0f}" for v in cum_crop],
+        "Cumulative Lease":      [f"₹{v:,.0f}" for v in cum_lease],
+        "Better Option":         ["🌾 Farm" if c > l else "🏠 Lease"
+                                  for c, l in zip(crop_incomes, lease_incomes)]
+    })
+    st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Charts ─────────────────────────────────────
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Bar chart - period income
+    x     = np.arange(len(year_labels))
+    width = 0.35
+    bars1 = ax1.bar(x - width/2, crop_incomes,  width, label="Crop Income",  color="#2ecc71")
+    bars2 = ax1.bar(x + width/2, lease_incomes, width, label="Lease Income", color="#e74c3c")
+    ax1.set_title(f"{crop} — {location}\nPeriod-wise Income ({acres} acres)",
+                  fontsize=11, fontweight="bold")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(year_labels, rotation=45, ha="right", fontsize=8)
+    ax1.set_ylabel("Income (₹)")
+    ax1.legend()
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"₹{v:,.0f}"))
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
+
+    # Line chart - cumulative
+    ax2.plot(year_labels, cum_crop,  marker="o", color="#2ecc71",
+             linewidth=2, markersize=5, label="Cumulative Crop")
+    ax2.plot(year_labels, cum_lease, marker="s", color="#e74c3c",
+             linewidth=2, markersize=5, label="Cumulative Lease")
+    ax2.fill_between(range(len(year_labels)), cum_crop, cum_lease,
+                     alpha=0.1,
+                     color="#2ecc71" if total_diff > 0 else "#e74c3c")
+    ax2.set_title(f"Cumulative Income over {years} Years",
+                  fontsize=11, fontweight="bold")
+    ax2.set_xticks(range(len(year_labels)))
+    ax2.set_xticklabels(year_labels, rotation=45, ha="right", fontsize=8)
+    ax2.set_ylabel("Cumulative Income (₹)")
+    ax2.legend()
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"₹{v:,.0f}"))
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+
     plt.tight_layout()
     st.pyplot(fig)
 
     st.divider()
 
-    # Summary Table
+    # ── Full Summary ───────────────────────────────
     st.markdown("### 📋 Summary")
     summary = pd.DataFrame({
         "Parameter": [
-            "State", "Crop", "Month", "Land Size",
-            "Irrigation", "Market Scenario",
-            "Mandi Price", "Yield",
-            "Gross Crop Income", "Farming Cost",
-            "Net Crop Income", "Lease Income",
+            "State", "District", "Crop", "Years",
+            "Land Size", "Irrigation", "Market Scenario",
+            "Mandi Price", "Yield", "Crop Cycles/Year",
+            "Cost/Cycle/Acre", "Net Crop/Year/Acre",
+            "Lease Rate/Acre/Year",
+            "Total Crop Income", "Total Lease Income",
             "Difference", "Best Option"
         ],
         "Value": [
-            state, crop, month, f"{acres} acres",
-            irrigation, risk,
-            f"₹{price:,.0f}/quintal", f"{yield_kg:,.0f} kg/ha",
-            f"₹{total_gross:,.0f}", f"₹{total_cost:,.0f}",
-            f"₹{net_crop_income:,.0f}", f"₹{total_lease:,.0f}",
-            f"₹{abs(difference):,.0f}", better
+            state, district or "N/A", crop, f"{years} years",
+            f"{acres} acres", irrigation, risk,
+            f"₹{price_used:,.0f}/quintal", f"{yield_kg:,.0f} kg/ha",
+            str(cycles),
+            f"₹{cost_per_cycle_acre:,}",
+            f"₹{net_per_year_acre*acres:,.0f}",
+            f"₹{lease_per_year_acre:,}",
+            f"₹{total_crop:,.0f}", f"₹{total_lease:,.0f}",
+            f"₹{abs(total_diff):,.0f}", better
         ]
     })
     st.dataframe(summary, use_container_width=True, hide_index=True)
-
-    st.caption(
-        f"ℹ️ Lease rates for {state}: ₹{lease_min:,}–₹{lease_max:,}/acre/year "
-        f"(NITI Aayog). Using **{lease_choice.lower()}** rate of ₹{lease_per_acre:,}/acre."
-    )
+    st.caption(f"ℹ️ Lease rates for {location}: "
+               f"₹{lease_min:,}–₹{lease_max:,}/acre/year (NITI Aayog). "
+               f"Using **{lease_choice.lower()}** rate.")
