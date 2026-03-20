@@ -178,11 +178,22 @@ st.info(f"📍 **{location}** lease rates per acre/year:\n\n"
         f"*(Source: NITI Aayog Agricultural Land Leasing Report)*")
 
 lease_choice   = st.radio("Select lease rate:",
-                           ["Minimum", "Average", "Maximum"],
+                           ["Minimum", "Average", "Maximum", "Enter Manually"],
                            index=1, horizontal=True)
-lease_per_acre = {"Minimum": lease_min,
-                  "Average": lease_avg,
-                  "Maximum": lease_max}[lease_choice]
+
+if lease_choice == "Enter Manually":
+    lease_per_acre = st.number_input(
+        "Enter your actual local lease rate (Rs/acre/year):",
+        min_value=1000,
+        max_value=500000,
+        value=lease_avg,
+        step=1000,
+        help="Ask local farmers or check with your taluk office"
+    )
+else:
+    lease_per_acre = {"Minimum": lease_min,
+                      "Average": lease_avg,
+                      "Maximum": lease_max}[lease_choice]
 
 st.divider()
 
